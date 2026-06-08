@@ -10,7 +10,7 @@ Features
 - Dynamic network configuration
 
   
-architecture diagram
+architecture diagram:
 Gas Sensor
    │
 ESP32 Sender
