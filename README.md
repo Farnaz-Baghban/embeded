@@ -1,4 +1,5 @@
 ESP32 IoT Gas Sensor (Bluetooth → MQTT)
+
 A modular IoT pipeline for collecting gas sensor data using ESP32 devices and forwarding it to an MQTT broker for monitoring and analysis.
 
 The system uses a two‑device architecture where the first ESP32 reads the sensor and transmits the data via Bluetooth, while the second ESP32 receives the data and forwards it to the MQTT infrastructure.
