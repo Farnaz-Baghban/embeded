@@ -1,68 +1,78 @@
-#include <WiFi.h>
-#include <PubSubClient.h>
-#include <BluetoothSerial.h>
+// scalability
+// responsiveness
+// modular design
+// JSON parsing for structured payload
+// حذف delay()
+// instead of delay(2000); we use vTaskDelay(pdMS_TO_TICKS(1000));
 
+// delay کل CPU رو block می‌کند
+// vTaskDelay فقط task را suspend می‌کند
+// سیستم responsive می‌ماند
 
-// why we added FreeRTOS?
-// FreeRTOS allows concurrent tasks such as Bluetooth communication and MQTT publishing to run independently 
-// without blocking the main execution loop.
-//  This improves responsiveness and scalability in IoT systems.
+#include "BluetoothSerial.h"
+#include <ArduinoJson.h>
 
 BluetoothSerial SerialBT;
 
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+/* ---------- FREERTOS OBJECTS ---------- */
 
 QueueHandle_t sensorQueue;
 
-String mqttBroker = "";
-int mqttPort = 1883;
+/* ---------- BLUETOOTH RX TASK ---------- */
 
-const char* mqttTopic = "sensor/gas";
+void bluetooth_rx_task(void *param)
+{
+    while (1)
+    {
+        if (SerialBT.available())
+        {
+            String data = SerialBT.readStringUntil('\n');
 
-/* WiFi credentials (can be changed easily) */
-const char* ssid = "YOUR_WIFI";
-const char* password = "YOUR_PASSWORD";
+            StaticJsonDocument<200> doc;
 
-/* ---------- WIFI CONNECTION ---------- */
+            DeserializationError error = deserializeJson(doc, data);
 
-void wifi_connect() {
+            if (!error)
+            {
+                int gasValue = doc["gas"];
 
-    Serial.println("Connecting to WiFi...");
+                Serial.print("Received gas value: ");
+                Serial.println(gasValue);
 
-    WiFi.begin(ssid, password);
-
-    while (WiFi.status() != WL_CONNECTED) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        Serial.print(".");
-    }
-
-    Serial.println("\nWiFi connected");
-    Serial.print("Device IP: ");
-    Serial.println(WiFi.localIP());
-}
-
-/* ---------- MQTT CONNECTION ---------- */
-
-void mqtt_connect() {
-
-    while (!mqttClient.connected()) {
-
-        Serial.println("Connecting to MQTT broker...");
-
-        if (mqttClient.connect("ESP32_receiver")) {
-            Serial.println("MQTT connected");
+                xQueueSend(sensorQueue, &gasValue, portMAX_DELAY);
+            }
+            else
+            {
+                Serial.print("JSON parse failed: ");
+                Serial.println(error.c_str());
+            }
         }
-        else {
-            Serial.println("MQTT failed, retrying...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
-/* ---------- BLUETOOTH TASK ---------- */
+/* ---------- DATA PROCESS TASK ---------- */
 
-void bluetooth_task(void *param) {
+void processing_task(void *param)
+{
+    int value;
+
+    while (1)
+    {
+        if (xQueueReceive(sensorQueue, &value, portMAX_DELAY))
+        {
+            Serial.print("Processing gas value: ");
+            Serial.println(value);
+        }
+    }
+}
+
+/* ---------- SETUP ---------- */
+
+void setup()
+{
+    Serial.begin(115200);
 
     SerialBT.begin("ESP32_receiver", true);
 
@@ -70,71 +80,11 @@ void bluetooth_task(void *param) {
 
     SerialBT.connect("ESP32_sender");
 
-    while (1) {
-
-        if (SerialBT.available()) {
-
-            String data = SerialBT.readStringUntil('\n');
-
-            int value = data.toInt();
-
-            xQueueSend(sensorQueue, &value, portMAX_DELAY);
-
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
-/* ---------- MQTT TASK ---------- */
-
-void mqtt_task(void *param) {
-
-    int sensorValue;
-
-    while (1) {
-
-        if (!mqttClient.connected()) {
-            mqtt_connect();
-        }
-
-        mqttClient.loop();
-
-        if (xQueueReceive(sensorQueue, &sensorValue, portMAX_DELAY)) {
-
-            char payload[32];
-            sprintf(payload, "%d", sensorValue);
-
-            mqttClient.publish(mqttTopic, payload);
-
-            Serial.print("Published: ");
-            Serial.println(payload);
-        }
-    }
-}
-
-/* ---------- SETUP ---------- */
-
-void setup() {
-
-    Serial.begin(115200);
-
     sensorQueue = xQueueCreate(10, sizeof(int));
 
-    wifi_connect();
-
-    /* MQTT broker auto detect example
-       here we simply use gateway IP
-    */
-
-    IPAddress gateway = WiFi.gatewayIP();
-    mqttBroker = gateway.toString();
-
-    mqttClient.setServer(mqttBroker.c_str(), mqttPort);
-
     xTaskCreatePinnedToCore(
-        bluetooth_task,
-        "bluetooth_task",
+        bluetooth_rx_task,
+        "bluetooth_rx_task",
         4096,
         NULL,
         1,
@@ -143,9 +93,9 @@ void setup() {
     );
 
     xTaskCreatePinnedToCore(
-        mqtt_task,
-        "mqtt_task",
-        4096,
+        processing_task,
+        "processing_task",
+        2048,
         NULL,
         1,
         NULL,
@@ -155,7 +105,7 @@ void setup() {
 
 /* ---------- LOOP ---------- */
 
-void loop() {
-
+void loop()
+{
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
